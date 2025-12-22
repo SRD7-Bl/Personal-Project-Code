@@ -1,14 +1,26 @@
-//
-//  main.cpp
-//  Personal project
-//
-//  Created by Leo Yang on 2025-12-22.
-//
 
-#include <iostream>
+#include "setup.hpp"
+#include "mazecode.hpp"
+#include "maze_state.hpp"
 
-int main(int argc, const char * argv[]) {
-    // insert code here...
-    std::cout << "Hello, World!\n";
+using namespace std;
+
+int main(){
+    readMaze();
+    DFS_for_maze();
+    BFS_for_maze();
     return 0;
 }
+
+/*
+ 
+ 7 7
+ 4 0 0 0 1 0 0
+ 1 1 1 0 1 0 1
+ 0 0 0 0 0 0 0
+ 0 1 1 1 1 1 0
+ 0 0 0 0 0 1 0
+ 1 1 1 1 0 1 0
+ 0 0 0 0 0 0 3
+
+ */
