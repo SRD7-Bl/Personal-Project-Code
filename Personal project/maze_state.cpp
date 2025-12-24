@@ -12,6 +12,7 @@ int bestLen = INF;
 
 std::vector<std::pair<int,int>> curPath, bestPath;
 std::queue<point> q;
+//std::vector<std::pair<int,int>> AStar_shortest_path();
 
 void init(){
     memset(vis,0,sizeof(vis));

@@ -23,5 +23,8 @@ inline bool inBounds(int x, int y){ //use inline to prevent duplicate symbols
     return (0 <= x && x < n && 0 <= y && y < m);
 }
 
+// used in astar
+extern std::vector<std::pair<int,int>> AStar_shortest_path();
+
 void init();
 void readMaze();
