@@ -1,5 +1,6 @@
 import sys
 import argparse
+import json,os,re
 from dataclasses import dataclass,field
 from typing import Dict, Tuple, Optional
 
@@ -65,6 +66,7 @@ class MazeModel:
         self.n, self.m = n, m
         self.start = (sx, sy)
         self.end = (ex, ey)
+        #self.walls.clear()
         self.reset_states()
         self.message = f"Meta loaded: {n}x{m}, start={self.start}, end={self.end}"
 
@@ -369,6 +371,7 @@ class MainWindow(QMainWindow):
             x, y = ev.get("x"), ev.get("y")
             if x is not None and y is not None:
                 self.model.visited.add((x, y))
+                self.model.frontier.discard((x, y))
                 self.model.message = f"Visited add {(x, y)}"
 
         elif op == "frontier_add":
@@ -376,6 +379,44 @@ class MainWindow(QMainWindow):
             if x is not None and y is not None:
                 self.model.frontier.add((x, y))
                 self.model.message = f"Frontier add {(x, y)}"
+                
+        elif op in ("wall", "set_wall"):
+            x, y = ev.get("x"), ev.get("y")
+            is_wall = ev.get("is_wall", True)
+            if x is not None and y is not None:
+                if is_wall:
+                    self.model.walls.add((x, y))
+                else:
+                    self.model.walls.discard((x, y))
+                self.model.message = f"Wall {'add' if is_wall else 'remove'} {(x, y)}"
+
+        elif op == "walls":
+            # 支持一次性传一堆墙： {"op":"walls","cells":[[x,y],...]}
+            cells = ev.get("cells", [])
+            cnt = 0
+            for c in cells:
+                if isinstance(c, (list, tuple)) and len(c) >= 2:
+                    self.model.walls.add((int(c[0]), int(c[1])))
+                    cnt += 1
+                elif isinstance(c, dict) and "x" in c and "y" in c:
+                    self.model.walls.add((int(c["x"]), int(c["y"])))
+                    cnt += 1
+            self.model.message = f"Walls loaded: {cnt}"
+
+        elif op in ("frontier_remove", "frontier_pop"):
+            x, y = ev.get("x"), ev.get("y")
+            if x is not None and y is not None:
+                self.model.frontier.discard((x, y))
+                self.model.message = f"Frontier remove {(x, y)}"
+
+        elif op == "path":
+            # 最终路径： {"op":"path","cells":[[x,y],...]}
+            # 这里先把 path 画成 visited（简单 MVP）。你也可以单独加一个 self.model.path 来上色。
+            cells = ev.get("cells", [])
+            for c in cells:
+                if isinstance(c, (list, tuple)) and len(c) >= 2:
+                    self.model.visited.add((int(c[0]), int(c[1])))
+            self.model.message = f"Path cells: {len(cells)}"
 
         elif op == "found":
             x, y = ev.get("x"), ev.get("y")
@@ -396,28 +437,121 @@ class MainWindow(QMainWindow):
     # ---------------------------
     # Later: loading API (placeholder)
     # ---------------------------
+    
+    def load_maze_txt(self, maze_path: str):
+        n, m, walls, s, e = self.load_walls_from_txt(maze_path)
+
+        self.model.walls = walls
+
+        # 如果 txt 里有 4/3，就用它覆盖（这样绿/红格就和 txt 一致）
+        if s is not None:
+            self.model.start = s
+        if e is not None:
+            self.model.end = e
+    
     def load_events_from_jsonl(self, path: str):
-        """
-        Placeholder ONLY (don't implement yet per your request).
-        Later you'll:
-          - open(path)
-          - for each line -> json.loads
-          - append to self.events
-        """
-        QMessageBox.information(self, "Not Implemented", "File loading is not implemented yet.")
+        if not path:
+            QMessageBox.warning(self, "No file", "Empty --events path.")
+            return
+
+        if not os.path.exists(path):
+            QMessageBox.critical(self, "Not found", f"File does not exist:\n{path}")
+            return
+
+        events = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for ln, line in enumerate(f, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        events.append(json.loads(line))
+                    except json.JSONDecodeError as e:
+                        raise ValueError(f"JSON decode error at line {ln}: {e}\nLine={line[:200]}") from e
+        except Exception as e:
+            QMessageBox.critical(self, "Load failed", str(e))
+            return
+
+        self.timer.stop()
+        self.events = events
+        self.event_idx = 0
+
+        # 清空当前状态
+        self.model.reset_states()
+        #self.model.walls.clear()
+
+        # 预处理：把 meta + 墙体类事件先应用掉，这样一加载就能看到正确迷宫
+        while self.event_idx < len(self.events):
+            op = self.events[self.event_idx].get("op", "")
+            if op in ("meta", "wall", "set_wall", "walls"):
+                self.apply_event(self.events[self.event_idx])
+                self.event_idx += 1
+                continue
+            break
+
+        self.model.message = f"Loaded {len(self.events)} events from {path}"
+        self.update_status_labels()
+        self.grid.update()
+
+    @staticmethod
+    def load_walls_from_txt(path: str):
+        with open(path, "r", encoding="utf-8") as f:
+            raw_lines = [ln.strip() for ln in f if ln.strip()]
+
+        if not raw_lines:
+            raise ValueError(f"Empty maze file: {path}")
+
+        # 读第一行 n m
+        header = [int(x) for x in re.findall(r"-?\d+", raw_lines[0])]
+        if len(header) < 2:
+            raise ValueError(f"First line must contain n m, got: {raw_lines[0]!r}")
+        n, m = header[0], header[1]
+
+        if len(raw_lines) < 1 + n:
+            raise ValueError(f"Expected {n} rows after header, but got {len(raw_lines)-1}")
+
+        walls = set()
+        start = None
+        end = None
+
+        for x in range(n):
+            nums = [int(x) for x in re.findall(r"-?\d+", raw_lines[1 + x])]
+            if len(nums) != m:
+                raise ValueError(f"Row {x} length {len(nums)} != {m}. Line={raw_lines[1+x]!r}")
+
+            for y, v in enumerate(nums):
+                if v == 1:
+                    walls.add((x, y))
+                elif v == 4:
+                    start = (x, y)
+                elif v == 3:
+                    end = (x, y)
+                # 0 以及其他值默认当空地
+
+        return n, m, walls, start, end
 
 
 def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--events", type=str, default="")
+    parser.add_argument("--maze", type=str, default="")
     args = parser.parse_args()
     print("Events path =", args.events)
+    print("Maze path   =", args.maze)
     
     app = QApplication(sys.argv)
     w = MainWindow()
+    
+    if args.maze:
+        w.load_maze_txt(args.maze)
+    if args.events:
+        w.load_events_from_jsonl(args.events)
+
     w.show()
     sys.exit(app.exec_())
+
 
 
 if __name__ == "__main__":

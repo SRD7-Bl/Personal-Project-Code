@@ -24,7 +24,7 @@ void launch_gui(const string& algo){
         return ;
     }
     
-    string cmd = Q(py)+" "+Q(gui.string())+" --events "+Q(events.string());
+    string cmd = Q(py)+" "+Q(gui.string())+" --events "+Q(events.string())+" --maze "+Q("data/ScannedMaze.txt");
     int rc = system(cmd.c_str());
     if(rc != 0) cerr<<"Failed to launch GUI, rc= "<<rc<<endl;
 }
@@ -58,7 +58,7 @@ int main(int argc, char* argv[]){
         std::cout << "A*: shortest length = " << (int)path.size() - 1 << "\n";
     }
     
-    launch_gui("bfs");
+    launch_gui("astar");
 
     return 0;
 }
