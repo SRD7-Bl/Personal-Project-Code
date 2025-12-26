@@ -27,4 +27,4 @@ inline bool inBounds(int x, int y){ //use inline to prevent duplicate symbols
 extern std::vector<std::pair<int,int>> AStar_shortest_path();
 
 void init();
-void readMaze();
+bool readMazeFromFile(const std::string& path);
