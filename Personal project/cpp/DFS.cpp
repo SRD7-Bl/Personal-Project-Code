@@ -28,20 +28,18 @@ static void emit_event(ofstream& out, int& tick, const string& op, int x,int y,i
         << "}\n";
 }
 
-static void dfs(int x, int y, int dist, ofstream& out, int& tick, bool& foundFlag){
-    if(foundFlag) return;
+void dfs(int x, int y, int dist, ofstream& out, int& tick){
     
     if (!inBounds(x, y)) return; //out of bound
     if (Map[x][y] == 1) return; //wall
     if (vis[x][y]) return; //already been
 
     if (dist >= bestLen) return;
-    
-    
-    
+
     vis[x][y] = true;
     curPath.push_back({x, y});
     emit_event(out, tick, "set_current", x, y, dist);
+    emit_event(out, tick, "path_push", x, y, dist);
     emit_event(out, tick, "visited_add", x, y, dist);
 
     // at the endpoint
@@ -50,8 +48,8 @@ static void dfs(int x, int y, int dist, ofstream& out, int& tick, bool& foundFla
         bestPath = curPath;
         
         emit_event(out, tick, "found", x, y, dist);
-        foundFlag = true;
         
+        emit_event(out, tick, "path_pop", x, y, dist);
         vis[x][y] = false;
         curPath.pop_back();
         return;
@@ -60,10 +58,11 @@ static void dfs(int x, int y, int dist, ofstream& out, int& tick, bool& foundFla
     for (int k = 0; k < 4; ++k){
         int nx = x + dx4[k];
         int ny = y + dy4[k];
-        dfs(nx, ny, dist + 1,out,tick,foundFlag);
+        dfs(nx, ny, dist + 1,out,tick);
         //emit_event(out, tick, "frontier_add", nx, ny, dist + 1);
     }
-    
+        
+    emit_event(out, tick, "path_pop", x, y, dist);
     vis[x][y] = false;
     curPath.pop_back();
 }
@@ -87,8 +86,7 @@ void DFS_for_maze(string out_dir){
             << ",\"ey\":" << ey
             << "}\n";
     
-    bool foundFlag = false;
-    dfs(sx, sy, 0,out,tick,foundFlag);
+    dfs(sx, sy, 0,out,tick);
     emit_event(out, tick, "done", -1, -1, bestLen == INF ? -1 : bestLen);
     out.close();
     if (bestLen == INF){

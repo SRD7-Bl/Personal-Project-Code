@@ -4,11 +4,11 @@ import json,os,re
 from dataclasses import dataclass,field
 from typing import Dict, Tuple, Optional
 
-from PyQt5.QtCore import Qt, QTimer, QSize
+from PyQt5.QtCore import Qt, QTimer, QSize, pyqtSignal, QSignalBlocker
 from PyQt5.QtGui import QColor, QPainter, QPen, QBrush, QFont
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QSlider, QFrame, QSpinBox, QMessageBox
+    QPushButton, QLabel, QSlider, QFrame, QSpinBox, QMessageBox, QSplitter
 )
 
 # ---------------------------
@@ -53,6 +53,9 @@ class MazeModel:
         self.step = 0
         self.last_op = "-"
         self.message = "Ready"
+        
+        self.cur_path = []   # list[(x,y)]
+        self.cur_path_set = set()
 
     def reset_states(self):
         self.frontier.clear()
@@ -81,10 +84,11 @@ class MazeModel:
 # Grid widget
 # ---------------------------
 class GridWidget(QWidget):
-    def __init__(self, model: MazeModel, parent=None):
+    def __init__(self, model: MazeModel, parent=None, editable_walls: bool = False):
         super().__init__(parent)
         self.model = model
-        self.setMinimumSize(QSize(520, 520))
+        self.editable_walls = editable_walls
+        self.setMinimumSize(QSize(260, 260))
         self.setSizePolicy(self.sizePolicy().Expanding, self.sizePolicy().Expanding)
 
     def paintEvent(self, event):
@@ -141,6 +145,8 @@ class GridWidget(QWidget):
         Optional: click to toggle walls (handy for quick testing).
         Not required for MVP, but useful.
         """
+        if not self.editable_walls:
+            return
         if event.button() != Qt.LeftButton:
             return
 
@@ -171,40 +177,34 @@ class GridWidget(QWidget):
             self.model.message = f"Wall added at {pos}"
 
         self.update()
-        self.parent().update_status_labels()
-
+        self.status_changed.emit()
 
 # ---------------------------
 # Main window: player skeleton
 # ---------------------------
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("PP Maze Visualizer (Skeleton)")
+class PlayerPane(QWidget):
+    def __init__(self, title:str, parent = None, editable_walls = False):
+        super().__init__(parent)
+        self.title = title
+
         self.model = MazeModel()
 
-        # Timer for playback
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_tick)
 
-        # event stream (in-memory placeholder)
         self.events = []
         self.event_idx = 0
 
-        self._build_ui()
+        self._build_ui(editable_walls)
         self._wire_signals()
 
-        # For now, load a fake meta so you see something
-        self.model.apply_meta(10, 10, 0, 0, 9, 9)
-        self.update_status_labels()
-        self.grid.update()
+    def _build_ui(self, editable_walls: bool):
+        root = QVBoxLayout(self)
 
-    def _build_ui(self):
-        central = QWidget()
-        root = QVBoxLayout(central)
+        self.lbl_title = QLabel(self.title)
+        root.addWidget(self.lbl_title)
 
-        # Grid
-        self.grid = GridWidget(self.model, parent=self)
+        self.grid = GridWidget(self.model, parent=self, editable_walls=editable_walls)
         root.addWidget(self.grid, stretch=1)
 
         # Controls panel
@@ -213,9 +213,13 @@ class MainWindow(QMainWindow):
         panel_layout = QHBoxLayout(panel)
 
         self.btn_play = QPushButton("Play")
+        self.btn_play.setVisible(False)
         self.btn_pause = QPushButton("Pause")
+        self.btn_pause.setVisible(False)
         self.btn_step = QPushButton("Step")
+        self.btn_step.setVisible(False)
         self.btn_reset = QPushButton("Reset")
+        self.btn_reset.setVisible(False)
 
         panel_layout.addWidget(self.btn_play)
         panel_layout.addWidget(self.btn_pause)
@@ -224,8 +228,9 @@ class MainWindow(QMainWindow):
 
         panel_layout.addSpacing(20)
 
-        panel_layout.addWidget(QLabel("Speed(ms):"))
+        #panel_layout.addWidget(QLabel("Speed(ms):"))
         self.speed_slider = QSlider(Qt.Horizontal)
+        self.speed_slider.setVisible(False)
         self.speed_slider.setMinimum(10)
         self.speed_slider.setMaximum(500)
         self.speed_slider.setValue(80)
@@ -233,14 +238,16 @@ class MainWindow(QMainWindow):
         panel_layout.addWidget(self.speed_slider)
 
         self.speed_value = QLabel("80")
+        self.speed_value.setVisible(False)
         self.speed_value.setFixedWidth(40)
         panel_layout.addWidget(self.speed_value)
 
         panel_layout.addSpacing(20)
 
         # Optional: step-per-tick (for fast playback)
-        panel_layout.addWidget(QLabel("Batch:"))
+        #panel_layout.addWidget(QLabel("Batch:"))
         self.batch_spin = QSpinBox()
+        self.batch_spin.setVisible(False)
         self.batch_spin.setMinimum(1)
         self.batch_spin.setMaximum(50)
         self.batch_spin.setValue(1)
@@ -267,8 +274,10 @@ class MainWindow(QMainWindow):
 
         root.addWidget(status, stretch=0)
 
-        self.setCentralWidget(central)
-        self.resize(820, 860)
+        #self.setCentralWidget(central)
+        #self.resize(820, 860)
+        
+        #self.grid.status_changed.connect(self.update_status_labels)
 
     def _wire_signals(self):
         self.btn_play.clicked.connect(self.play)
@@ -360,35 +369,51 @@ class MainWindow(QMainWindow):
                 ev.get("ex", self.model.end[0]),
                 ev.get("ey", self.model.end[1]),
             )
-
+            
+        if op == "done":
+            self.timer.stop()
+            self.model.message = "Done"
+            
+        x = ev.get("x",None)
+        y = ev.get("y",None)
+        if x is None or y is None:
+            return
+            
         elif op == "set_current":
-            x, y = ev.get("x"), ev.get("y")
-            if x is not None and y is not None:
-                self.model.current = (x, y)
-                self.model.message = f"Current = {(x, y)}"
+            self.model.current = (x, y)
+            self.model.message = f"Current = {(x, y)}"
+                
+        elif op == "path_push":
+            self.model.cur_path.append(self.pos)
+            self.model.cur_path_set.add(self.pos)
+
+        elif op == "path_pop":
+            # 理论上 pop 的就是栈顶；保险起见按 pos 移除也行
+            if self.model.cur_path and self.model.cur_path[-1] == self.pos:
+                self.model.cur_path.pop()
+                self.model.cur_path_set.discard(self.pos)
+            else:
+                # fallback：乱序也能删
+                if pos in self.model.cur_path_set:
+                    self.model.cur_path_set.remove(pos)
+                    self.model.cur_path = [p for p in self.model.cur_path if p != pos]
 
         elif op == "visited_add":
-            x, y = ev.get("x"), ev.get("y")
-            if x is not None and y is not None:
-                self.model.visited.add((x, y))
-                self.model.frontier.discard((x, y))
-                self.model.message = f"Visited add {(x, y)}"
+            self.model.visited.add((x, y))
+            self.model.frontier.discard((x, y))
+            self.model.message = f"Visited add {(x, y)}"
 
         elif op == "frontier_add":
-            x, y = ev.get("x"), ev.get("y")
-            if x is not None and y is not None:
-                self.model.frontier.add((x, y))
-                self.model.message = f"Frontier add {(x, y)}"
+            self.model.frontier.add((x, y))
+            self.model.message = f"Frontier add {(x, y)}"
                 
         elif op in ("wall", "set_wall"):
-            x, y = ev.get("x"), ev.get("y")
             is_wall = ev.get("is_wall", True)
-            if x is not None and y is not None:
-                if is_wall:
-                    self.model.walls.add((x, y))
-                else:
-                    self.model.walls.discard((x, y))
-                self.model.message = f"Wall {'add' if is_wall else 'remove'} {(x, y)}"
+            if is_wall:
+                self.model.walls.add((x, y))
+            else:
+                self.model.walls.discard((x, y))
+            self.model.message = f"Wall {'add' if is_wall else 'remove'} {(x, y)}"
 
         elif op == "walls":
             # 支持一次性传一堆墙： {"op":"walls","cells":[[x,y],...]}
@@ -404,10 +429,8 @@ class MainWindow(QMainWindow):
             self.model.message = f"Walls loaded: {cnt}"
 
         elif op in ("frontier_remove", "frontier_pop"):
-            x, y = ev.get("x"), ev.get("y")
-            if x is not None and y is not None:
-                self.model.frontier.discard((x, y))
-                self.model.message = f"Frontier remove {(x, y)}"
+            self.model.frontier.discard((x, y))
+            self.model.message = f"Frontier remove {(x, y)}"
 
         elif op == "path":
             # 最终路径： {"op":"path","cells":[[x,y],...]}
@@ -419,15 +442,11 @@ class MainWindow(QMainWindow):
             self.model.message = f"Path cells: {len(cells)}"
 
         elif op == "found":
-            x, y = ev.get("x"), ev.get("y")
             self.model.current = (x, y) if x is not None and y is not None else self.model.current
             self.model.message = "Found end!"
 
-        elif op == "done":
-            self.timer.stop()
-            self.model.message = "Done"
-        else:
-            self.model.message = f"Unknown op: {op}"
+            
+        
 
     def update_status_labels(self):
         self.lbl_step.setText(f"step: {self.model.step}")
@@ -493,6 +512,22 @@ class MainWindow(QMainWindow):
         self.model.message = f"Loaded {len(self.events)} events from {path}"
         self.update_status_labels()
         self.grid.update()
+        
+    def set_speed_ms(self, ms: int):
+        ms = max(1, int(ms))
+        # 如果你保留了 speed_slider，就同步 UI；如果之后要隐藏本地控件，也没问题
+        if hasattr(self, "speed_slider"):
+            with QSignalBlocker(self.speed_slider):
+                self.speed_slider.setValue(ms)
+        self.timer.setInterval(ms)
+        self.update_status_labels()
+
+    def set_batch(self, k: int):
+        k = max(1, int(k))
+        if hasattr(self, "batch_spin"):
+            with QSignalBlocker(self.batch_spin):
+                self.batch_spin.setValue(k)
+        self.update_status_labels()
 
     @staticmethod
     def load_walls_from_txt(path: str):
@@ -531,27 +566,114 @@ class MainWindow(QMainWindow):
 
         return n, m, walls, start, end
 
+class CompareWindow(QMainWindow):
+    def __init__(self, panes: list[tuple[str, str]], maze_path: str = ""):
+        super().__init__()
+        self.setWindowTitle("PP Maze Visualizer - Compare Mode")
+
+        central = QWidget()
+        root = QVBoxLayout(central)
+        
+        ctrl = QWidget()
+        ctrl_layout = QHBoxLayout(ctrl)
+
+        btn_play  = QPushButton("Play All")
+        btn_pause = QPushButton("Pause All")
+        btn_step  = QPushButton("Step All")
+        btn_reset = QPushButton("Reset All")
+
+        ctrl_layout.addWidget(btn_play)
+        ctrl_layout.addWidget(btn_pause)
+        ctrl_layout.addWidget(btn_step)
+        ctrl_layout.addWidget(btn_reset)
+
+        ctrl_layout.addSpacing(20)
+        ctrl_layout.addWidget(QLabel("Speed(ms):"))
+        speed = QSlider(Qt.Horizontal)
+        speed.setMinimum(10)
+        speed.setMaximum(500)
+        speed.setValue(80)
+        speed.setFixedWidth(200)
+        ctrl_layout.addWidget(speed)
+
+        ctrl_layout.addSpacing(20)
+        ctrl_layout.addWidget(QLabel("Batch:"))
+        batch = QSpinBox()
+        batch.setMinimum(1)
+        batch.setMaximum(50)
+        batch.setValue(1)
+        ctrl_layout.addWidget(batch)
+
+        root.addWidget(ctrl, stretch=0)      # 放在 splitter 上面
+        
+        self.splitter = QSplitter(Qt.Horizontal)
+        root.addWidget(self.splitter, stretch=1)
+        
+        btn_play.clicked.connect(lambda:  self._foreach_pane(lambda p: p.play()))
+        btn_pause.clicked.connect(lambda: self._foreach_pane(lambda p: p.pause()))
+        btn_step.clicked.connect(lambda:  self._foreach_pane(lambda p: p.step_once()))
+        btn_reset.clicked.connect(lambda: self._foreach_pane(lambda p: p.reset()))
+
+        speed.valueChanged.connect(lambda v: self._foreach_pane(lambda p: p.set_speed_ms(v)))
+        batch.valueChanged.connect(lambda v: self._foreach_pane(lambda p: p.set_batch(v)))
+
+
+        self.setCentralWidget(central)
+
+        # 可选：先读一次 maze，然后给每个 pane 复用同一份墙体/起终点
+        self.maze_path = maze_path
+
+        self.panes: list[PlayerPane] = []
+        for title, events_path in panes:
+            self.add_pane(title, events_path)
+
+    def add_pane(self, title: str, events_path: str):
+        pane = PlayerPane(title=title, editable_walls=False)
+
+        if self.maze_path:
+            pane.load_maze_txt(self.maze_path)
+
+        if events_path:
+            pane.load_events_from_jsonl(events_path)
+
+        self.panes.append(pane)
+        self.splitter.addWidget(pane)
+        
+    def _foreach_pane(self, fn):
+        for p in self.panes:
+            fn(p)
+
+
 
 def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--events", type=str, default="")
     parser.add_argument("--maze", type=str, default="")
+    parser.add_argument("--pane",action="append",default=[],help='repeatable: "Title:path/to/events.jsonl"')
     args = parser.parse_args()
+    
     print("Events path =", args.events)
     print("Maze path   =", args.maze)
     
-    app = QApplication(sys.argv)
-    w = MainWindow()
+    panes=[]
+    for item in args.pane:
+        if ":" in item:
+            title,path = item.split(":",1)
+        else:
+            title,path = item,""
+        panes.append((title.strip(),path.strip()))
     
-    if args.maze:
-        w.load_maze_txt(args.maze)
-    if args.events:
-        w.load_events_from_jsonl(args.events)
+    app = QApplication(sys.argv)
+    if len(panes) <= 1:
+        # 单栏模式：你可以继续用原来的 MainWindow，或者也用 CompareWindow 但只放一个 pane
+        w = CompareWindow(panes=panes or [("Single", args.events if hasattr(args, "events") else "")],
+                          maze_path=args.maze)
+    else:
+        w = CompareWindow(panes=panes, maze_path=args.maze)
 
     w.show()
     sys.exit(app.exec_())
-
 
 
 if __name__ == "__main__":

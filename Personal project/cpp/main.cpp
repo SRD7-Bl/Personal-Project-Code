@@ -9,22 +9,28 @@ static string Q(const string& s){
     return "\"" + s + "\"";
 }
 
-void launch_gui(const string& algo){
+void launch_gui(){
     const string py = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3";
     
     filesystem::path gui = filesystem::path("python") / "GUI_Animation.py";
-    filesystem::path events = filesystem::path("out") / (algo + "_events.jsonl");
+    //filesystem::path events = filesystem::path("out") / (algo + "_events.jsonl");
     
-    if(!filesystem::exists(gui)){
-        cerr<<"GUI script not found: "<<gui<<endl;
-        return ;
-    }
-    if(!filesystem::exists(events)){
-        cerr<<"Events not found: "<<events<<endl;
-        return ;
-    }
+    filesystem::path bfs = filesystem::path("out") / "bfs_events.jsonl";
+    filesystem::path dfs = filesystem::path("out") / "dfs_events.jsonl";
+    filesystem::path astar = filesystem::path("out") / "astar_events.jsonl";
     
-    string cmd = Q(py)+" "+Q(gui.string())+" --events "+Q(events.string())+" --maze "+Q("data/ScannedMaze.txt");
+    
+    if(!filesystem::exists(gui)){cerr<<"GUI script not found: "<<gui<<endl;return ;}
+    if(!filesystem::exists(bfs)){cerr<<"Events not found: "<<bfs<<endl;return ;}
+    if(!filesystem::exists(dfs)){cerr<<"Events not found: "<<dfs<<endl;return ;}
+    if(!filesystem::exists(astar)){cerr<<"Events not found: "<<astar<<endl;return ;}
+    
+    string cmd = Q(py)+" "+Q(gui.string())+
+                " --maze "+Q("data/ScannedMaze.txt")+
+                " --pane "+Q("BFS:"+bfs.string())+
+                " --pane "+Q("ASTAR:"+astar.string())+
+                " --pane "+Q("DFS:"+dfs.string());
+    
     int rc = system(cmd.c_str());
     if(rc != 0) cerr<<"Failed to launch GUI, rc= "<<rc<<endl;
 }
@@ -58,7 +64,7 @@ int main(int argc, char* argv[]){
         std::cout << "A*: shortest length = " << (int)path.size() - 1 << "\n";
     }
     
-    launch_gui("astar");
+    launch_gui();
 
     return 0;
 }
