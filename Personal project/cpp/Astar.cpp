@@ -2,14 +2,15 @@
 #include "setup.hpp"
 using namespace std;
 
-static void emit_event(ofstream& out, int& tick,
-                       const string& op, int x, int y, int dist){
+static void emit_event(ofstream& out, int& tick, const string& op, int x,int y,int dist,int px = -1,int py = -1){
     ++tick;
     out << "{\"t\":" << tick
-        << ",\"op\":\"" << op << "\""
+    << ",\"op\":\"" << op << "\""
         << ",\"x\":" << x
         << ",\"y\":" << y
         << ",\"dist\":" << dist
+        << ",\"px\":" << px
+        << ",\"py\":" << py
         << "}\n";
 }
 
@@ -102,7 +103,7 @@ vector<pair<int,int>> AStar_shortest_path(string out_dir){
                 parent[nx][ny] = {x,y};
                 int f = raw_g + h_manhattan(nx,ny);
                 pq.push({f,raw_g,nx,ny});
-                emit_event(out, tick, "frontier_add", nx, ny, raw_g);
+                emit_event(out, tick, "relax", nx, ny, raw_g, x,y);
             }
         }
     }

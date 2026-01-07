@@ -17,18 +17,22 @@
 #include "maze_state.hpp"
 using namespace std;
 
-static void emit_event(ofstream& out, int& tick, const string& op, int x,int y,int dist){
+static void emit_event(ofstream& out, int& tick, const string& op, int x,int y,int dist,int px = -1,int py = -1){
     ++tick;
     out << "{\"t\":" << tick
     << ",\"op\":\"" << op << "\""
         << ",\"x\":" << x
         << ",\"y\":" << y
         << ",\"dist\":" << dist
+        << ",\"px\":" << px
+        << ",\"py\":" << py
         << "}\n";
 }
 
 void BFS_for_maze(string out_dir){
     init();
+    vector<vector<int>> seen(n,vector<int>(m,0));
+    vector<vector<pair<int,int>>> parent(n,vector<pair<int,int>>(m,{-1,-1}));
     
     filesystem::path out_path = filesystem::path(out_dir) / "bfs_events.jsonl";
     ofstream out(out_path,ios::out|ios::trunc);
@@ -46,7 +50,10 @@ void BFS_for_maze(string out_dir){
             << ",\"ey\":" << ey
             << "}\n";
     q.push({sx,sy,0});
-    emit_event(out, tick, "frontier_add", sx,sy,0);
+    seen[sx][sy] = 1;
+    parent[sx][sy] = {sx,sy};
+    emit_event(out, tick, "frontier_add", sx,sy,0,sx,sy);
+    
     //BFS
     while(!q.empty()){
         point tmp = q.front();
@@ -55,11 +62,7 @@ void BFS_for_maze(string out_dir){
         int y = tmp.y;
         int step = tmp.step;
         
-        if(!inBounds(x, y)) continue;
-        if(Map[x][y] == 1) continue;
-        if(vis[x][y]) continue;
-        
-        if(step >= bestLen) continue;
+        //if(step >= bestLen) continue;
         
         emit_event(out,tick,"set_current",x,y,step);
         emit_event(out,tick,"visited_add",x,y,step);
@@ -67,7 +70,7 @@ void BFS_for_maze(string out_dir){
         if(x == ex && y == ey){
             bestLen = step;
             emit_event(out,tick,"found",x,y,step);
-            continue;
+            break;
         }
         
         vis[x][y] = 1;
@@ -76,13 +79,16 @@ void BFS_for_maze(string out_dir){
             int dx,dy;
             dx = x+dx4[i];
             dy = y+dy4[i];
-            q.push({dx,dy,step+1});
             
             if(!inBounds(dx, dy)) continue;
             if(Map[dx][dy] == 1) continue;
-            if(vis[dx][dy]) continue;
+            if(seen[dx][dy]) continue;
             
-            emit_event(out, tick, "frontier_add", dx, dy, step+1);
+            seen[dx][dy] = 1;
+            parent[dx][dy] = {x,y};
+            q.push({dx,dy,step+1});
+            
+            emit_event(out, tick, "frontier_add", dx, dy, step+1,x,y);
         }
         
         //vis[x][y] = 0;

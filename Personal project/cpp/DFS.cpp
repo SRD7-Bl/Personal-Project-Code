@@ -28,6 +28,20 @@ static void emit_event(ofstream& out, int& tick, const string& op, int x,int y,i
         << "}\n";
 }
 
+// DFS doesn't maintain a stable parent-tree like BFS/A* (because it backtracks).
+// So we explicitly emit the *current best path* as a stream of events.
+// GUI protocol:
+//   best_clear : clear previous orange path
+//   best_add   : add one cell to orange path (dist can be used as index)
+static void emit_best_path(ofstream& out, int& tick, const vector<pair<int,int>>& path){
+    // clear
+    emit_event(out, tick, "best_clear", -1, -1, (int)path.size());
+    // add cells
+    for (int i = 0; i < (int)path.size(); ++i){
+        emit_event(out, tick, "best_add", path[i].first, path[i].second, i);
+    }
+}
+
 void dfs(int x, int y, int dist, ofstream& out, int& tick){
     
     if (!inBounds(x, y)) return; //out of bound
@@ -46,6 +60,9 @@ void dfs(int x, int y, int dist, ofstream& out, int& tick){
     if (x == ex && y == ey){
         bestLen = dist;
         bestPath = curPath;
+
+        // Tell GUI to draw the new best path (orange)
+        emit_best_path(out, tick, bestPath);
         
         emit_event(out, tick, "found", x, y, dist);
         
@@ -55,14 +72,34 @@ void dfs(int x, int y, int dist, ofstream& out, int& tick){
         return;
     }
     
-    for (int k = 0; k < 4; ++k){
+    for (int k = 0; k < 4; ++k) {
         int nx = x + dx4[k];
         int ny = y + dy4[k];
-        dfs(nx, ny, dist + 1,out,tick);
-        //emit_event(out, tick, "frontier_add", nx, ny, dist + 1);
+
+        // preview candidates as "frontier" (blue) BEFORE diving in
+        if (!inBounds(nx, ny)) continue;
+        if (Map[nx][ny] == 1) continue;        // wall
+        if (vis[nx][ny]) continue;             // already in current recursion path
+        if (dist + 1 >= bestLen) continue;     // pruning
+
+        emit_event(out, tick, "frontier_add", nx, ny, dist + 1);
     }
-        
-    emit_event(out, tick, "path_pop", x, y, dist);
+
+    for (int k = 0; k < 4; ++k) {
+        int nx = x + dx4[k];
+        int ny = y + dy4[k];
+
+        if (!inBounds(nx, ny)) continue;
+        if (Map[nx][ny] == 1) continue;
+        if (vis[nx][ny]) continue;
+        if (dist + 1 >= bestLen) continue;
+
+        dfs(nx, ny, dist + 1, out, tick);
+
+        // remove from frontier after returning (safe even if it was already removed)
+        emit_event(out, tick, "frontier_remove", nx, ny, dist + 1);
+    }
+emit_event(out, tick, "path_pop", x, y, dist);
     vis[x][y] = false;
     curPath.pop_back();
 }
@@ -95,4 +132,5 @@ void DFS_for_maze(string out_dir){
         cout << "Shortest length(DFS) = " << bestLen << "\n";
     }
 }
+
 

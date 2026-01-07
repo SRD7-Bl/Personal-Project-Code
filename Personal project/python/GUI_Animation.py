@@ -4,7 +4,7 @@ import json,os,re
 from dataclasses import dataclass,field
 from typing import Dict, Tuple, Optional
 
-from PyQt5.QtCore import Qt, QTimer, QSize, pyqtSignal, QSignalBlocker
+from PyQt5.QtCore import Qt, QTimer, QSize, pyqtSignal, QSignalBlocker, QRect
 from PyQt5.QtGui import QColor, QPainter, QPen, QBrush, QFont
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -24,6 +24,7 @@ class CellColors:
     START: QColor = field(default_factory=lambda: QColor(50, 205, 50))       # lime green
     END: QColor = field(default_factory=lambda: QColor(220, 20, 60))         # crimson
     GRID_LINE: QColor = field(default_factory=lambda: QColor(220, 220, 220))
+    ORANGE: QColor = field(default_factory=lambda: QColor(255, 165, 0, 160))
 
 
 COL = CellColors()
@@ -56,15 +57,29 @@ class MazeModel:
         
         self.cur_path = []   # list[(x,y)]
         self.cur_path_set = set()
+        
+        self.parent = {}            # (x,y) -> (px,py)
+        self.best_path = []         # list[(x,y)]
+        self.best_path_set = set()
 
     def reset_states(self):
-        self.frontier.clear()
-        self.visited.clear()
+        # reset rendering/search state
+        self.frontier = set()
+        self.visited = set()
         self.current = None
+
+        # reset path reconstruction state (clears orange path too)
+        self.parent = {}
+        self.best_path = []
+        self.best_path_set = set()
+
+        # reset DFS live-stack path (if used)
+        self.cur_path = []
+        self.cur_path_set = set()
+
         self.step = 0
         self.last_op = "-"
         self.message = "Reset"
-
     def apply_meta(self, n: int, m: int, sx: int, sy: int, ex: int, ey: int):
         self.n, self.m = n, m
         self.start = (sx, sy)
@@ -134,6 +149,13 @@ class GridWidget(QWidget):
                 # grid line
                 painter.setPen(QPen(COL.GRID_LINE, 1))
                 painter.drawRect(rect_x, rect_y, cell, cell)
+        
+        if self.model.best_path_set:
+            for (x, y) in self.model.best_path_set:
+                if (x, y) == self.model.start or (x, y) == self.model.end:
+                    continue
+                rect = QRect(ox + y*cell, oy + x*cell, cell, cell)
+                painter.fillRect(rect, COL.ORANGE)
 
         # draw legend text (simple)
         painter.setPen(QPen(QColor(60, 60, 60)))
@@ -373,30 +395,71 @@ class PlayerPane(QWidget):
         if op == "done":
             self.timer.stop()
             self.model.message = "Done"
+            return
+
+        # DFS: explicit best-path stream
+        if op == "best_clear":
+            self.model.best_path = []
+            self.model.best_path_set = set()
+            self.model.message = "Best path cleared"
+            return
             
         x = ev.get("x",None)
         y = ev.get("y",None)
         if x is None or y is None:
             return
             
+        pos = (x, y)
+        px = ev.get("px", None)
+        py = ev.get("py", None)
+        if px is not None and py is not None and px >= 0 and py >= 0:
+            self.model.parent[pos] = (px, py)
+
+        if op == "best_add":
+            # DFS best-path stream
+            self.model.best_path.append(pos)
+            self.model.best_path_set.add(pos)
+            self.model.message = f"Best path add {pos}"
+            return
+            
+        if op in ("frontier_add", "relax"):
+            # A*: relax == (re)insert/update in open-set; show it as frontier
+            self.model.frontier.add(pos)
+            px = ev.get("px"); py = ev.get("py")
+            if px is not None and py is not None and px >= 0 and py >= 0:
+                self.model.parent[pos] = (px, py)
+        
         elif op == "set_current":
             self.model.current = (x, y)
+            # popped from frontier
+            self.model.frontier.discard(pos)
+            # BFS/A*: reconstruct best path from parent chain
+            # (DFS uses best_clear/best_add; its parent map is empty.)
+            if self.model.parent:
+                self.rebuild_best_path(pos)
             self.model.message = f"Current = {(x, y)}"
                 
         elif op == "path_push":
-            self.model.cur_path.append(self.pos)
-            self.model.cur_path_set.add(self.pos)
+            self.model.cur_path.append(pos)
+            self.model.cur_path_set.add(pos)
 
         elif op == "path_pop":
             # 理论上 pop 的就是栈顶；保险起见按 pos 移除也行
-            if self.model.cur_path and self.model.cur_path[-1] == self.pos:
+            if self.model.cur_path and self.model.cur_path[-1] == pos:
                 self.model.cur_path.pop()
-                self.model.cur_path_set.discard(self.pos)
+                self.model.cur_path_set.discard(pos)
             else:
                 # fallback：乱序也能删
                 if pos in self.model.cur_path_set:
                     self.model.cur_path_set.remove(pos)
                     self.model.cur_path = [p for p in self.model.cur_path if p != pos]
+
+        elif op == "best_add":
+            # DFS best path cell
+            self.model.best_path.append(pos)
+            self.model.best_path_set.add(pos)
+            self.model.message = f"Best add {pos}"
+        
 
         elif op == "visited_add":
             self.model.visited.add((x, y))
@@ -443,6 +506,9 @@ class PlayerPane(QWidget):
 
         elif op == "found":
             self.model.current = (x, y) if x is not None and y is not None else self.model.current
+            # Ensure final shortest path is shown for BFS/A*
+            if self.model.parent:
+                self.rebuild_best_path(pos)
             self.model.message = "Found end!"
 
             
@@ -452,6 +518,32 @@ class PlayerPane(QWidget):
         self.lbl_step.setText(f"step: {self.model.step}")
         self.lbl_op.setText(f"op: {self.model.last_op}")
         self.lbl_msg.setText(self.model.message)
+        
+    def rebuild_best_path(self, end_pos):
+        start = self.model.start
+        parent = self.model.parent
+
+        path = []
+        cur = end_pos
+        seen = set()  # 防止 parent 链出环导致死循环
+
+        while cur is not None and cur not in seen:
+            seen.add(cur)
+            path.append(cur)
+            if cur == start:
+                break
+            cur = parent.get(cur, None)
+
+        if not path or path[-1] != start:
+            # 说明 parent 链还不完整（比如 current 还没被 parent 记录）
+            self.model.best_path = []
+            self.model.best_path_set = set()
+            return
+
+        path.reverse()
+        self.model.best_path = path
+        self.model.best_path_set = set(path)
+
 
     # ---------------------------
     # Later: loading API (placeholder)
